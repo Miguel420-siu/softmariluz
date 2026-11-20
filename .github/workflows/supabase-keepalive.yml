@@ -1,0 +1,26 @@
+name: Supabase keepalive
+
+on:
+  schedule:
+    - cron: '17 12 * * 1,4'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Run a lightweight database query
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo "::error::Configure SUPABASE_DB_URL in GitHub Actions secrets."
+            exit 1
+          fi
+          docker run --rm \
+            -e SUPABASE_DB_URL \
+            postgres:17-alpine \
+            psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -c 'select 1;'
