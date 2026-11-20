@@ -36,7 +36,7 @@ interface BorrowerOption {
   id: string
   cartera_id: string
   nombre: string
-  identificacion: string
+  identificacion: string | null
   telefono: string | null
 }
 
@@ -286,6 +286,7 @@ export function LoansPage() {
     null,
   )
   const [deletingLoanId, setDeletingLoanId] = useState<string | null>(null)
+  const [cleaningOrphanLoans, setCleaningOrphanLoans] = useState(false)
   const [generatingClientPdf, setGeneratingClientPdf] = useState(false)
   const [pdfError, setPdfError] = useState<string | null>(null)
   const [sendingStatementEmail, setSendingStatementEmail] = useState(false)
@@ -581,6 +582,13 @@ export function LoansPage() {
         if (error) throw error
         permittedWallets = data ?? []
         setWallets(permittedWallets)
+        if (
+          !prestamoId &&
+          permittedWallets[0] &&
+          !permittedWallets.some((wallet) => wallet.id === filterWalletId)
+        ) {
+          setFilterWalletId(permittedWallets[0].id)
+        }
         if (permittedWallets[0]) {
           setFormWalletId((current) => current || permittedWallets[0].id)
         }
@@ -692,6 +700,7 @@ export function LoansPage() {
     prestamoId,
     profile,
     requestedBorrowerId,
+    setFilterWalletId,
   ])
 
   useEffect(() => {
@@ -1036,7 +1045,7 @@ export function LoansPage() {
     if (!supabase || !canManage) return
     const borrowerName = borrowerNames.get(loan.deudor_id) ?? 'este deudor'
     const confirmed = window.confirm(
-      `¿Eliminar el préstamo de ${borrowerName} por ${formatNumericAmount(loan.monto)}? Se borrarán también sus cuotas, pagos y prórrogas. La auditoría histórica se conservará. No se puede deshacer.`,
+      `¿Eliminar el préstamo de ${borrowerName} por ${formatNumericAmount(loan.monto)}? Se borrarán también sus cuotas, pagos y prórrogas. La auditoría se conservará y los movimientos de caja se compensarán para mantener la trazabilidad financiera. No se puede deshacer.`,
     )
     if (!confirmed) return
 
@@ -1058,6 +1067,37 @@ export function LoansPage() {
       )
     } finally {
       setDeletingLoanId(null)
+    }
+  }
+
+  async function cleanupOrphanLoans() {
+    if (!supabase || !canManage) return
+    const confirmed = window.confirm(
+      'Se eliminarán permanentemente los préstamos de prueba que ya no tengan un cliente asociado, junto con sus cuotas, pagos y prórrogas. La auditoría se conservará y los movimientos de caja se compensarán para mantener la trazabilidad financiera. ¿Continuar?',
+    )
+    if (!confirmed) return
+
+    setCleaningOrphanLoans(true)
+    setErrorMessage(null)
+    setSuccessMessage(null)
+    try {
+      const { data: deletedCount, error } = await supabase.rpc(
+        'eliminar_prestamos_huerfanos_pruebas',
+      )
+      if (error) throw error
+      setSuccessMessage(
+        deletedCount === 0
+          ? 'No se encontraron préstamos huérfanos.'
+          : `Se eliminaron ${deletedCount} préstamos huérfanos y sus datos relacionados.`,
+      )
+      setReloadCounter((counter) => counter + 1)
+    } catch (error) {
+      console.error('No se pudieron eliminar los préstamos huérfanos.', error)
+      setErrorMessage(
+        'No fue posible limpiar los préstamos huérfanos. Verifica que la migración de limpieza esté aplicada.',
+      )
+    } finally {
+      setCleaningOrphanLoans(false)
     }
   }
 
@@ -1809,7 +1849,6 @@ export function LoansPage() {
             onChange={(event) => setFilterWalletId(event.target.value)}
             className="mt-2 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base"
           >
-            <option value="">Todas las carteras</option>
             {wallets.map((wallet) => (
               <option key={wallet.id} value={wallet.id}>
                 {wallet.nombre}
@@ -1817,6 +1856,25 @@ export function LoansPage() {
             ))}
           </select>
         </label>
+      )}
+
+      {!isLoanDetail && canManage && !loading && visibleLoans.length === 0 && (
+        <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 sm:flex sm:items-center sm:justify-between sm:gap-4">
+          <p className="text-sm leading-6 text-amber-950">
+            ¿Borraste clientes durante las pruebas y quedaron préstamos sin
+            cliente asociado? Puedes limpiar esos registros huérfanos aquí.
+          </p>
+          <button
+            type="button"
+            disabled={cleaningOrphanLoans}
+            onClick={() => void cleanupOrphanLoans()}
+            className="mt-3 min-h-11 shrink-0 rounded-lg border border-amber-700 px-4 py-2 text-sm font-semibold text-amber-950 hover:bg-amber-100 disabled:cursor-wait disabled:opacity-60 sm:mt-0"
+          >
+            {cleaningOrphanLoans
+              ? 'Limpiando…'
+              : 'Limpiar préstamos huérfanos'}
+          </button>
+        </div>
       )}
 
       <section className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">

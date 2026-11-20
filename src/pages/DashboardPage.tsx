@@ -212,6 +212,11 @@ export function DashboardPage() {
     isAdmin,
     profile?.carteraId,
   )
+  const selectedWalletFilter = wallets.some(
+    (wallet) => wallet.id === walletFilter,
+  )
+    ? walletFilter
+    : wallets[0]?.id ?? ''
   const [loans, setLoans] = useState<DashboardLoan[]>([])
   const [borrowers, setBorrowers] = useState<DashboardBorrower[]>([])
   const [installments, setInstallments] = useState<DashboardInstallment[]>([])
@@ -282,7 +287,7 @@ export function DashboardPage() {
           loadAll(async (from, to) => {
             const { data, error } = await client
               .from('pagos')
-              .select('prestamo_id, monto, pagado_en, notas')
+              .select('prestamo_id, monto, pagado_en')
               .in('prestamo_id', loanBatch)
               .order('pagado_en')
               .range(from, to)
@@ -419,10 +424,20 @@ export function DashboardPage() {
     queueMicrotask(() => void loadData())
   }, [loadData])
 
+  useEffect(() => {
+    if (
+      isAdmin &&
+      wallets.length > 0 &&
+      !wallets.some((wallet) => wallet.id === walletFilter)
+    ) {
+      setWalletFilter(wallets[0]!.id)
+    }
+  }, [isAdmin, setWalletFilter, walletFilter, wallets])
+
   const visibleData = useMemo(() => {
     const walletIds = new Set(
       wallets
-        .filter((wallet) => !walletFilter || wallet.id === walletFilter)
+        .filter((wallet) => wallet.id === selectedWalletFilter)
         .map((wallet) => wallet.id),
     )
     const selectedLoans = loans.filter((loan) => walletIds.has(loan.cartera_id))
@@ -432,7 +447,7 @@ export function DashboardPage() {
       installments: installments.filter((row) => loanIds.has(row.prestamo_id)),
       payments: payments.filter((row) => loanIds.has(row.prestamo_id)),
     }
-  }, [installments, loans, payments, walletFilter, wallets])
+  }, [installments, loans, payments, selectedWalletFilter, wallets])
 
   const report = useMemo(() => {
     const months = getMonths(12)
@@ -716,11 +731,10 @@ export function DashboardPage() {
         <label className="mt-6 block max-w-sm text-sm font-medium text-slate-800">
           Filtrar por cartera
           <select
-            value={walletFilter}
+            value={selectedWalletFilter}
             onChange={(event) => setWalletFilter(event.target.value)}
             className="mt-2 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base"
           >
-            <option value="">Todas las carteras</option>
             {wallets.map((wallet) => (
               <option key={wallet.id} value={wallet.id}>
                 {wallet.nombre}
@@ -853,7 +867,7 @@ export function DashboardPage() {
               </p>
               <div className="mt-5 h-72 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={report.months} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+                  <ComposedChart data={report.months} margin={{ top: 24, right: 20, left: 0, bottom: 4 }}>
                     <defs>
                       <linearGradient id="monthly-interest-gradient" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="#14b8a6" stopOpacity={0.95} />
@@ -864,6 +878,7 @@ export function DashboardPage() {
                     <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
                     <YAxis
                       tickFormatter={currencyTick}
+                      domain={[0, (max: number) => (max === 0 ? 1 : max * 1.15)]}
                       tick={{ fontSize: 11, fill: '#64748b' }}
                       width={64}
                       axisLine={false}
@@ -882,6 +897,7 @@ export function DashboardPage() {
                         position="top"
                         fill="#0f172a"
                         fontSize={10}
+                        offset={8}
                         formatter={(value) =>
                           typeof value === 'number' && value > 0
                             ? currencyTick(value)

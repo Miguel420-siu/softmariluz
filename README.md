@@ -106,7 +106,13 @@ tasas al crear o cambiar un préstamo sin bloquear el uso de tasas históricas.
 Las migraciones `20261029165608_add_admin_test_deletion_rpcs.sql` y
 `20261029170247_return_document_path_for_test_deletion.sql` habilitan el borrado
 administrativo de datos de prueba y devuelven la ruta del documento para que el
-cliente la retire usando la API de Storage.
+cliente la retire usando la API de Storage. La migración
+`20261120010000_cleanup_orphan_test_loans_and_reset_codes.sql` asegura que al
+eliminar un deudor también se borren sus préstamos y permite limpiar préstamos
+huérfanos desde la interfaz de administración. La secuencia de códigos se
+reinicia al borrar el último préstamo de una cartera. La migración
+`20261120020000_fix_borrower_deletion_storage_cleanup.sql` mantiene la
+eliminación de documentos en la API de Storage, después de borrar el perfil.
 La migración `supabase/migrations/20261110030000_maryluz_cash_flow.sql`
 agrega el Control financiero, visible solo para el administrador y limitado en
 la base de datos a la cartera Mariluz. El control inicia con saldo cero y no
@@ -192,26 +198,33 @@ Cada préstamo recibe en la base de datos un código inmutable, consecutivo y
 único por cartera: `F-1` para Francisco y `M-1` para Mariluz. El código solo
 se muestra en la página de detalle del préstamo; los préstamos existentes se
 renumeran al aplicar la migración sin ceros a la izquierda, manteniendo el
-orden y número asignado. Los números no se reutilizan al borrar préstamos.
+orden y número asignado. El número no se reutiliza al borrar préstamos
+individuales; al eliminar el último préstamo de una cartera durante las
+pruebas, la secuencia se reinicia para que el siguiente vuelva a ser `F-1` o
+`M-1`.
 
-Al crear o editar un deudor, nombre, correo electrónico y teléfono son
-obligatorios en el formulario. No se repiten dentro de una cartera el número de
-identificación, el correo ni el teléfono. El correo se usa para enviar el
-extracto y el teléfono queda disponible para futuras notificaciones SMS.
+Al crear o editar un deudor, nombre, teléfono y dirección son obligatorios;
+identificación y correo son opcionales. No se repiten dentro de una cartera el
+número de identificación si se registra, el correo ni el teléfono. El correo se
+usa para enviar el extracto y el teléfono queda disponible para futuras
+notificaciones SMS.
 
 El perfil del deudor permite descargar un PDF con su nombre, identificación,
 dirección, teléfono y un préstamo activo seleccionado, con pagos, saldo y
 cronograma. Todos los importes del documento se muestran redondeados a dólares
 enteros y el saldo se calcula al generar el PDF. El administrador puede generar
-desde el dashboard un consolidado de préstamos activos (agrupado por cliente)
-y otro de préstamos terminados (una fila por préstamo); ambos incluyen las
-notas de los pagos y una fila de totales. El selector de deudores al crear un
+desde el dashboard consolidados de préstamos activos y terminados; cada
+préstamo tiene su propia fila con su código y sus valores, incluso cuando un
+cliente tenga varios préstamos. Los consolidados no incluyen notas de pagos y
+cierran con una fila de totales. El selector de deudores al crear un
 préstamo permite buscar por nombre o identificación. El cronograma muestra
 “Abono a capital”. Para pruebas, el administrador puede eliminar deudores o
-préstamos completos; la interfaz lo confirma explícitamente, la operación es
-irreversible y la auditoría histórica se conserva. Si la eliminación del
-documento privado falla después de borrar al deudor, la aplicación lo informa
-para que el objeto pendiente se limpie desde Storage.
+préstamos completos, además de limpiar préstamos huérfanos desde la página de
+préstamos; la interfaz lo confirma explícitamente, la operación es irreversible
+y la auditoría histórica se conserva. Los movimientos de caja se compensan para
+mantener la trazabilidad. Si la eliminación del documento privado falla
+después de borrar al deudor, la aplicación lo informa para que el objeto
+pendiente se limpie desde Storage.
 
 En el detalle de un préstamo, el administrador puede enviar el estado de cuenta
 PDF al correo registrado en el perfil del deudor. El correo es opcional; si no

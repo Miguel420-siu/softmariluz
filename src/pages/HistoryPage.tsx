@@ -13,7 +13,7 @@ interface Wallet {
 interface HistoryBorrower {
   id: string
   nombre: string
-  identificacion: string
+  identificacion: string | null
 }
 
 interface HistoryLoan {
@@ -87,6 +87,13 @@ export function HistoryPage() {
         if (error) throw error
         permittedWallets = data ? [data] : []
       }
+      if (
+        isAdmin &&
+        permittedWallets[0] &&
+        !permittedWallets.some((wallet) => wallet.id === walletFilter)
+      ) {
+        setWalletFilter(permittedWallets[0].id)
+      }
 
       const [borrowerResult, loanResult] = await Promise.all([
         supabase
@@ -117,7 +124,7 @@ export function HistoryPage() {
     } finally {
       setLoading(false)
     }
-  }, [isAdmin, profile])
+  }, [isAdmin, profile, setWalletFilter, walletFilter])
 
   useEffect(() => {
     queueMicrotask(() => void loadData())
@@ -166,7 +173,7 @@ export function HistoryPage() {
       !normalizedSearch ||
       loan.codigo.toLocaleLowerCase().includes(normalizedSearch) ||
       borrower?.nombre.toLocaleLowerCase().includes(normalizedSearch) ||
-      borrower?.identificacion.toLocaleLowerCase().includes(normalizedSearch)
+      borrower?.identificacion?.toLocaleLowerCase().includes(normalizedSearch)
     return (
       matchesWallet &&
       matchesSearch &&
@@ -196,7 +203,6 @@ export function HistoryPage() {
               onChange={(event) => setWalletFilter(event.target.value)}
               className="mt-2 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base"
             >
-              <option value="">Todas las carteras</option>
               {wallets.map((wallet) => (
                 <option key={wallet.id} value={wallet.id}>
                   {wallet.nombre}
@@ -281,7 +287,7 @@ export function HistoryPage() {
                         {borrower?.nombre ?? 'Deudor'}
                       </Link>
                       <p className="mt-1 text-sm text-slate-600">
-                        Identificación: {borrower?.identificacion ?? 'No disponible'}
+                        Identificación: {borrower?.identificacion || 'No registrada'}
                       </p>
                       {isAdmin && (
                         <p className="mt-1 text-sm text-slate-500">

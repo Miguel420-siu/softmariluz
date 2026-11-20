@@ -30,6 +30,7 @@ interface CashControl {
 
 interface CashMovement {
   id: string
+  referencia_id: string | null
   tipo: string
   monto: number
   intereses: number
@@ -161,13 +162,73 @@ export function CashControlPage() {
 
       const { data: movementData, error: movementError } = await supabase
         .from('movimientos_caja')
-        .select('id, tipo, monto, intereses, descripcion, created_at')
+        .select('id, referencia_id, tipo, monto, intereses, descripcion, created_at')
         .eq('cartera_id', wallet.id)
         .gte('created_at', controlData.iniciado_en)
         .order('created_at', { ascending: false })
         .limit(5000)
       if (movementError) throw movementError
-      setMovements(movementData ?? [])
+      const loadedMovements = movementData ?? []
+      const loanIds = [
+        ...new Set(
+          loadedMovements
+            .filter(
+              (movement) =>
+                movement.tipo === 'reinversion_prestamo' &&
+                movement.referencia_id,
+            )
+            .map((movement) => movement.referencia_id)
+            .filter((id): id is string => id !== null),
+        ),
+      ]
+
+      if (loanIds.length === 0) {
+        setMovements(loadedMovements)
+      } else {
+        const { data: relatedLoans, error: loansError } = await supabase
+          .from('prestamos')
+          .select('id, codigo, deudor_id')
+          .in('id', loanIds)
+        if (loansError) throw loansError
+
+        const borrowerIds = [...new Set((relatedLoans ?? []).map((loan) => loan.deudor_id))]
+        const { data: relatedBorrowers, error: borrowersError } = borrowerIds.length
+          ? await supabase
+              .from('deudores')
+              .select('id, nombre')
+              .in('id', borrowerIds)
+          : { data: [], error: null }
+        if (borrowersError) throw borrowersError
+
+        const borrowerNames = new Map(
+          (relatedBorrowers ?? []).map((borrower) => [borrower.id, borrower.nombre]),
+        )
+        const refinanceLoanIds = new Set(
+          loadedMovements
+            .filter((movement) =>
+              movement.descripcion.includes('después de refinanciar'),
+            )
+            .map((movement) => movement.referencia_id),
+        )
+        const loanDescriptions = new Map(
+          (relatedLoans ?? []).map((loan) => [
+            loan.id,
+            `Desembolso del préstamo ${loan.codigo}, ${borrowerNames.get(loan.deudor_id) ?? 'cliente'}${refinanceLoanIds.has(loan.id) ? ' después de refinanciar' : ''}.`,
+          ]),
+        )
+        setMovements(
+          loadedMovements.map((movement) => ({
+            ...movement,
+            descripcion:
+              movement.tipo === 'reinversion_prestamo' &&
+              movement.referencia_id &&
+              loanDescriptions.has(movement.referencia_id)
+              ? (loanDescriptions.get(movement.referencia_id) ??
+                movement.descripcion)
+                : movement.descripcion,
+          })),
+        )
+      }
     } catch (error) {
       console.error('No se pudo cargar el control financiero.', error)
       setErrorMessage(

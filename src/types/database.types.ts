@@ -175,7 +175,7 @@ export type Database = {
           email: string | null
           estado: string | null
           id: string
-          identificacion: string
+          identificacion: string | null
           nombre: string
           referido_por: string | null
           telefono: string | null
@@ -192,7 +192,7 @@ export type Database = {
           email?: string | null
           estado?: string | null
           id?: string
-          identificacion: string
+          identificacion?: string | null
           nombre: string
           referido_por?: string | null
           telefono?: string | null
@@ -209,7 +209,7 @@ export type Database = {
           email?: string | null
           estado?: string | null
           id?: string
-          identificacion?: string
+          identificacion?: string | null
           nombre?: string
           referido_por?: string | null
           telefono?: string | null
@@ -545,6 +545,10 @@ export type Database = {
       eliminar_deudor_pruebas: {
         Args: { p_deudor_id: string }
         Returns: string
+      }
+      eliminar_prestamos_huerfanos_pruebas: {
+        Args: never
+        Returns: number
       }
       eliminar_prestamo_pruebas: {
         Args: { p_prestamo_id: string }

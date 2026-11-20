@@ -21,7 +21,7 @@ interface Borrower {
   id: string
   cartera_id: string
   nombre: string
-  identificacion: string
+  identificacion: string | null
   email: string | null
   telefono: string | null
   direccion: string | null
@@ -46,6 +46,10 @@ interface BorrowerFormValues {
   referido_por: string
 }
 
+type DuplicateBorrowerField = 'identificacion' | 'email' | 'telefono'
+
+const pageSize = 500
+
 const emptyValues: BorrowerFormValues = {
   nombre: '',
   identificacion: '',
@@ -63,8 +67,8 @@ function optionalValue(value: string) {
   return value.trim() || null
 }
 
-function isDuplicateBorrowerError(error: unknown) {
-  if (typeof error !== 'object' || error === null) return false
+function duplicateBorrowerField(error: unknown): DuplicateBorrowerField | null {
+  if (typeof error !== 'object' || error === null) return null
 
   const details = [
     'code' in error && typeof error.code === 'string' ? error.code : '',
@@ -78,12 +82,33 @@ function isDuplicateBorrowerError(error: unknown) {
     .join(' ')
     .toLowerCase()
 
+  if (details.includes('deudores_cartera_identificacion_unique')) {
+    return 'identificacion'
+  }
+  if (details.includes('deudores_cartera_email_unique')) return 'email'
+  if (details.includes('deudores_cartera_telefono_unique')) return 'telefono'
+  return null
+}
+
+function isUniqueViolation(error: unknown) {
   return (
-    details.includes('23505') ||
-    details.includes('deudores_cartera_identificacion_unique') ||
-    details.includes('deudores_cartera_email_unique') ||
-    details.includes('deudores_cartera_telefono_unique')
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === '23505'
   )
+}
+
+function getErrorMessage(error: unknown) {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    typeof error.message === 'string'
+  ) {
+    return error.message
+  }
+  return 'Error desconocido de Supabase.'
 }
 
 async function prepareIdentityDocument(file: File) {
@@ -182,9 +207,11 @@ export function BorrowersPage() {
   const [busy, setBusy] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null)
   const [deletingBorrowerId, setDeletingBorrowerId] = useState<string | null>(null)
   const [reloadCounter, setReloadCounter] = useState(0)
   const formSectionRef = useRef<HTMLElement>(null)
+  const borrowerListRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     if (!formOpen) return
@@ -216,8 +243,17 @@ export function BorrowersPage() {
         if (error) throw error
         permittedWallets = data ?? []
         setWallets(permittedWallets)
+        if (
+          !permittedWallets.some((wallet) => wallet.id === walletFilter) &&
+          permittedWallets[0]
+        ) {
+          setWalletFilter(permittedWallets[0].id)
+        }
         if (!formWalletId && permittedWallets[0]) {
-          setFormWalletId(walletFilter || permittedWallets[0].id)
+          setFormWalletId(
+            permittedWallets.find((wallet) => wallet.id === walletFilter)?.id ??
+              permittedWallets[0].id,
+          )
         }
       } else if (profile?.carteraId) {
         const { data, error } = await supabase
@@ -231,16 +267,23 @@ export function BorrowersPage() {
         setFormWalletId(profile.carteraId)
       }
 
-      const { data, error } = await supabase
-        .from('deudores')
-        .select(
-          'id, cartera_id, nombre, identificacion, email, telefono, direccion, apartamento, ciudad, estado, codigo_postal, referido_por, documento_path',
-        )
-        .order('nombre')
-        .limit(500)
-      if (error) throw error
+      const loadedBorrowers: Borrower[] = []
+      for (let from = 0; ; from += pageSize) {
+        const { data, error } = await supabase
+          .from('deudores')
+          .select(
+            'id, cartera_id, nombre, identificacion, email, telefono, direccion, apartamento, ciudad, estado, codigo_postal, referido_por, documento_path',
+          )
+          .order('nombre')
+          .order('id')
+          .range(from, from + pageSize - 1)
+        if (error) throw error
+        const page = (data ?? []) as Borrower[]
+        loadedBorrowers.push(...page)
+        if (page.length < pageSize) break
+      }
 
-      setBorrowers((data ?? []) as Borrower[])
+      setBorrowers(loadedBorrowers)
     } catch (error) {
       console.error('No se pudieron cargar los deudores.', error)
       setErrorMessage(
@@ -249,7 +292,7 @@ export function BorrowersPage() {
     } finally {
       setLoading(false)
     }
-  }, [canManage, formWalletId, profile, walletFilter])
+  }, [canManage, formWalletId, profile, setWalletFilter, walletFilter])
 
   useEffect(() => {
     queueMicrotask(() => void loadData())
@@ -266,6 +309,7 @@ export function BorrowersPage() {
     setDocument(null)
     setErrorMessage(null)
     setSuccessMessage(null)
+    setDuplicateNotice(null)
     setFormOpen(true)
   }
 
@@ -274,7 +318,7 @@ export function BorrowersPage() {
     setFormWalletId(borrower.cartera_id)
     setValues({
       nombre: borrower.nombre,
-      identificacion: borrower.identificacion,
+      identificacion: borrower.identificacion ?? '',
       email: borrower.email ?? '',
       telefono: formatUsPhoneInput(borrower.telefono ?? ''),
       direccion: borrower.direccion ?? '',
@@ -287,6 +331,7 @@ export function BorrowersPage() {
     setDocument(null)
     setErrorMessage(null)
     setSuccessMessage(null)
+    setDuplicateNotice(null)
     setFormOpen(true)
   }
 
@@ -308,10 +353,15 @@ export function BorrowersPage() {
       setErrorMessage('El teléfono debe tener exactamente 10 dígitos de Estados Unidos.')
       return
     }
+    if (!values.direccion.trim()) {
+      setErrorMessage('Ingresa la dirección del deudor.')
+      return
+    }
 
     setBusy(true)
     setErrorMessage(null)
     setSuccessMessage(null)
+    setDuplicateNotice(null)
     let borrowerId = editing?.id
     let borrowerPersisted = Boolean(editing)
     let saveNotice = editing ? 'Deudor actualizado.' : 'Deudor creado.'
@@ -319,7 +369,7 @@ export function BorrowersPage() {
     const payload = {
       cartera_id: formWalletId,
       nombre: values.nombre.trim(),
-      identificacion: values.identificacion.trim(),
+      identificacion: optionalValue(values.identificacion),
       email: optionalValue(values.email)?.toLowerCase() ?? null,
       telefono: phoneDigits(values.telefono),
       direccion: optionalValue(values.direccion),
@@ -403,7 +453,21 @@ export function BorrowersPage() {
       setReloadCounter((counter) => counter + 1)
     } catch (error) {
       console.error('No se pudo guardar el deudor.', error)
-      const isDuplicate = isDuplicateBorrowerError(error)
+      const duplicateField = duplicateBorrowerField(error)
+      const isDuplicate = duplicateField !== null || isUniqueViolation(error)
+      if (isDuplicate) {
+        setWalletFilter(formWalletId)
+        setSearch(duplicateField ? values[duplicateField] : '')
+        setDuplicateNotice(
+          'El cliente ya existe en esta cartera. Ajusté la lista y la búsqueda para mostrar el registro existente.',
+        )
+        window.requestAnimationFrame(() => {
+          borrowerListRef.current?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start',
+          })
+        })
+      }
       setErrorMessage(
         isDuplicate
           ? 'Ya existe un cliente en esta cartera con ese número de identificación, teléfono o correo electrónico. Verifica los datos ingresados.'
@@ -422,7 +486,7 @@ export function BorrowersPage() {
   async function deleteBorrower(borrower: Borrower) {
     if (!supabase || !canManage) return
     const confirmed = window.confirm(
-      `¿Eliminar a ${borrower.nombre}? Esta acción borrará también sus préstamos, cronogramas, pagos y prórrogas. Se conservará la auditoría histórica. No se puede deshacer.`,
+      `¿Eliminar a ${borrower.nombre}? Esta acción borrará también sus préstamos, cronogramas, pagos y prórrogas. Se conservará la auditoría y los movimientos de caja se compensarán para mantener la trazabilidad financiera. No se puede deshacer.`,
     )
     if (!confirmed) return
 
@@ -460,7 +524,7 @@ export function BorrowersPage() {
     } catch (error) {
       console.error('No se pudo eliminar el deudor de prueba.', error)
       setErrorMessage(
-        'No fue posible eliminar el deudor. Revisa las relaciones y los permisos de Supabase.',
+        `No fue posible eliminar el deudor: ${getErrorMessage(error)}`,
       )
     } finally {
       setDeletingBorrowerId(null)
@@ -474,7 +538,7 @@ export function BorrowersPage() {
     const matchesSearch =
       !normalizedSearch ||
       borrower.nombre.toLocaleLowerCase().includes(normalizedSearch) ||
-      borrower.identificacion.toLocaleLowerCase().includes(normalizedSearch) ||
+      (borrower.identificacion ?? '').toLocaleLowerCase().includes(normalizedSearch) ||
       formatUsPhone(borrower.telefono)
         .toLocaleLowerCase()
         .includes(normalizedSearch) ||
@@ -517,7 +581,6 @@ export function BorrowersPage() {
             onChange={(event) => setWalletFilter(event.target.value)}
             className="mt-2 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base"
           >
-            <option value="">Todas las carteras</option>
             {wallets.map((wallet) => (
               <option key={wallet.id} value={wallet.id}>
                 {wallet.nombre}
@@ -581,19 +644,17 @@ export function BorrowersPage() {
                 autoComplete="name"
               />
               <Field
-                label="Identificación"
+                label="Identificación (opcional)"
                 name="identificacion"
                 value={values.identificacion}
                 onChange={updateValue}
-                required
               />
               <Field
-                label="Correo electrónico"
+                label="Correo electrónico (opcional)"
                 name="email"
                 value={values.email}
                 onChange={updateValue}
                 type="email"
-                required
                 autoComplete="email"
               />
               <Field
@@ -613,6 +674,7 @@ export function BorrowersPage() {
                 name="direccion"
                 value={values.direccion}
                 onChange={updateValue}
+                required
                 autoComplete="street-address"
               />
               <Field
@@ -668,6 +730,14 @@ export function BorrowersPage() {
               <p className="mt-4 text-sm text-slate-600">
                 Este perfil ya tiene un documento adjunto. Sube otro solo si
                 deseas reemplazarlo.
+              </p>
+            )}
+            {duplicateNotice && (
+              <p
+                role="status"
+                className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950"
+              >
+                {duplicateNotice}
               </p>
             )}
             {errorMessage && (
@@ -728,7 +798,10 @@ export function BorrowersPage() {
         </label>
       </div>
 
-      <section className="mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section
+        ref={borrowerListRef}
+        className="mt-5 scroll-mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+      >
         <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
           <h2 className="font-semibold text-slate-950">
             {filteredBorrowers.length} deudor
@@ -798,7 +871,7 @@ export function BorrowersPage() {
                       Identificación
                     </dt>
                     <dd className="mt-1 break-words text-slate-900">
-                      {borrower.identificacion}
+                      {borrower.identificacion || 'No registrada'}
                     </dd>
                   </div>
                   <div>

@@ -14,7 +14,7 @@ interface BorrowerProfile {
   id: string
   cartera_id: string
   nombre: string
-  identificacion: string
+  identificacion: string | null
   email: string | null
   telefono: string | null
   direccion: string | null
@@ -214,7 +214,7 @@ export function BorrowerProfilePage() {
                 {borrower.nombre}
               </h1>
               <p className="mt-2 text-sm text-slate-600">
-                Identificación: {borrower.identificacion}
+                Identificación: {borrower.identificacion || 'No registrada'}
               </p>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">

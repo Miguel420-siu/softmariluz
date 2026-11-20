@@ -7,7 +7,7 @@ const paymentTimeZone = 'America/New_York'
 
 export interface PdfBorrower {
   nombre: string
-  identificacion: string
+  identificacion: string | null
   email?: string | null
   telefono: string | null
   direccion: string | null
@@ -43,7 +43,6 @@ export interface PdfPayment {
   prestamo_id: string
   monto: number
   pagado_en: string
-  notas: string | null
 }
 
 export interface PdfBorrowerRow extends PdfBorrower {
@@ -53,7 +52,7 @@ export interface PdfBorrowerRow extends PdfBorrower {
 
 interface ConsolidatedReportRow {
   nombre: string
-  codigos: string[]
+  codigo: string
   fechaPrestamo: string
   fechaPrimeraCuota: string | null
   fechaUltimaCuota: string | null
@@ -63,7 +62,6 @@ interface ConsolidatedReportRow {
   pagado: bigint
   cuotasPagadas: number
   cuotasRestantes: number
-  notas: string[]
 }
 
 function cents(value: number) {
@@ -314,7 +312,7 @@ async function buildClientLoanPdf(
   drawField('Nombre', borrower.nombre, contentLeft + 6, customerTop + 17, columnWidth - 12)
   drawField(
     'Identificación',
-    borrower.identificacion,
+    borrower.identificacion || 'No registrada',
     contentLeft + columnWidth + 4,
     customerTop + 17,
     customerColumnWidth,
@@ -452,17 +450,7 @@ export async function createClientLoanPdfBlob(
   return pdf.output('blob')
 }
 
-function paymentNotes(payments: PdfPayment[]) {
-  return payments
-    .filter((payment) => payment.notas?.trim())
-    .map(
-      (payment) =>
-        `${dateLabel(payment.pagado_en.slice(0, 10), true)}: ${payment.notas?.trim()}`,
-    )
-}
-
 function reportRows(
-  status: 'active' | 'finished',
   loans: PdfLoan[],
   borrowers: PdfBorrowerRow[],
   installments: PdfInstallment[],
@@ -495,9 +483,8 @@ function reportRows(
       .map((item) => item.fecha_vencimiento)
       .sort()
     return {
-      borrowerId: borrower.id,
       nombre: borrower.nombre,
-      codigos: [loan.codigo],
+      codigo: loan.codigo,
       fechaPrestamo: loan.fecha_inicio,
       fechaPrimeraCuota: installmentDates[0] ?? null,
       fechaUltimaCuota: installmentDates[installmentDates.length - 1] ?? null,
@@ -507,75 +494,9 @@ function reportRows(
       pagado: totals.paid,
       cuotasPagadas: totals.paidCount,
       cuotasRestantes: totals.remainingCount,
-      notas: paymentNotes(loanPayments),
     }
   })
-
-  if (status === 'finished') {
-    return loanRows.map((row) => ({
-      nombre: row.nombre,
-      codigos: row.codigos,
-      fechaPrestamo: row.fechaPrestamo,
-      fechaPrimeraCuota: row.fechaPrimeraCuota,
-      fechaUltimaCuota: row.fechaUltimaCuota,
-      principal: row.principal,
-      interes: row.interes,
-      debe: row.debe,
-      pagado: row.pagado,
-      cuotasPagadas: row.cuotasPagadas,
-      cuotasRestantes: row.cuotasRestantes,
-      notas: row.notas,
-    }))
-  }
-
-  const grouped = new Map<string, ConsolidatedReportRow>()
-  for (const row of loanRows) {
-    const current = grouped.get(row.borrowerId)
-    if (!current) {
-      grouped.set(row.borrowerId, {
-        nombre: row.nombre,
-        codigos: row.codigos,
-        fechaPrestamo: row.fechaPrestamo,
-        fechaPrimeraCuota: row.fechaPrimeraCuota,
-        fechaUltimaCuota: row.fechaUltimaCuota,
-        principal: row.principal,
-        interes: row.interes,
-        debe: row.debe,
-        pagado: row.pagado,
-        cuotasPagadas: row.cuotasPagadas,
-        cuotasRestantes: row.cuotasRestantes,
-        notas: row.notas,
-      })
-      continue
-    }
-    current.codigos.push(...row.codigos)
-    current.fechaPrestamo =
-      row.fechaPrestamo < current.fechaPrestamo
-        ? row.fechaPrestamo
-        : current.fechaPrestamo
-    if (
-      row.fechaPrimeraCuota &&
-      (!current.fechaPrimeraCuota ||
-        row.fechaPrimeraCuota < current.fechaPrimeraCuota)
-    ) {
-      current.fechaPrimeraCuota = row.fechaPrimeraCuota
-    }
-    if (
-      row.fechaUltimaCuota &&
-      (!current.fechaUltimaCuota ||
-        row.fechaUltimaCuota > current.fechaUltimaCuota)
-    ) {
-      current.fechaUltimaCuota = row.fechaUltimaCuota
-    }
-    current.principal += row.principal
-    current.interes += row.interes
-    current.debe += row.debe
-    current.pagado += row.pagado
-    current.cuotasPagadas += row.cuotasPagadas
-    current.cuotasRestantes += row.cuotasRestantes
-    current.notas.push(...row.notas)
-  }
-  return [...grouped.values()]
+  return loanRows
 }
 
 export function generateConsolidatedLoansPdf(
@@ -587,7 +508,6 @@ export function generateConsolidatedLoansPdf(
   walletName: string,
 ) {
   const rows = reportRows(
-    status,
     loans,
     borrowers,
     installments,
@@ -621,7 +541,7 @@ export function generateConsolidatedLoansPdf(
     startY: 29,
     head: [[
       'Cliente',
-      'Código(s) de préstamo',
+      'Código de préstamo',
       'Fecha del préstamo',
       'Fecha primera cuota',
       'Fecha última cuota',
@@ -630,12 +550,11 @@ export function generateConsolidatedLoansPdf(
       'Debe',
       'Ha pagado',
       'Cuotas pagadas',
-      'Cuotas pendientes',
-      'Notas de pagos',
+      'Cuotas\npendientes',
     ]],
     body: rows.map((row) => [
       row.nombre,
-      row.codigos.join('\n'),
+      row.codigo,
       dateLabel(row.fechaPrestamo, true),
       row.fechaPrimeraCuota ? dateLabel(row.fechaPrimeraCuota, true) : '—',
       row.fechaUltimaCuota ? dateLabel(row.fechaUltimaCuota, true) : '—',
@@ -645,7 +564,6 @@ export function generateConsolidatedLoansPdf(
       money(row.pagado),
       whole(row.cuotasPagadas),
       whole(row.cuotasRestantes),
-      row.notas.join('\n'),
     ]),
     foot: [[
       `TOTAL (${whole(rows.length)} registros)`,
@@ -656,7 +574,6 @@ export function generateConsolidatedLoansPdf(
       money(totals.principal),
       money(totals.interes),
       money(totals.due),
-      '',
       '',
       '',
       '',
@@ -672,7 +589,7 @@ export function generateConsolidatedLoansPdf(
     margin: { left: 10, right: 10, bottom: 14 },
     columnStyles: {
       0: { cellWidth: 32 },
-      1: { cellWidth: 22 },
+      1: { cellWidth: 18 },
       2: { cellWidth: 25 },
       3: { cellWidth: 17 },
       4: { cellWidth: 17 },
@@ -680,9 +597,8 @@ export function generateConsolidatedLoansPdf(
       6: { cellWidth: 20 },
       7: { cellWidth: 20 },
       8: { cellWidth: 22 },
-      9: { cellWidth: 16 },
-      10: { cellWidth: 16 },
-      11: { cellWidth: 'auto' },
+      9: { cellWidth: 20 },
+      10: { cellWidth: 22 },
     },
   })
 
